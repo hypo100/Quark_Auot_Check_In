@@ -50,19 +50,19 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      # 早上主签到（随机延迟 0~90 秒）
+      # 早上主签到（随机延迟 0~120 秒）
       - name: 随机延迟（早上）
         if: github.event.schedule == '7 1 * * *'
         run: |
-          delay=$((RANDOM % 90))
+          delay=$((RANDOM % 120))
           echo "早上签到，延迟 ${delay} 秒防风控..."
           sleep $delay
 
-      # 下午兜底 + 手动触发（延迟短一点）
+      # 下午兜底 + 手动触发（延迟0~120 秒）
       - name: 随机延迟（下午或手动）
         if: github.event.schedule == '12 5 * * *' || github.event_name == 'workflow_dispatch'
         run: |
-          delay=$((RANDOM % 40))
+          delay=$((RANDOM % 120))
           echo "下午兜底或手动触发，延迟 ${delay} 秒..."
           sleep $delay
 
