@@ -2,22 +2,10 @@ name: Quark签到
 
 on:
   schedule:
-    # 改成避开整点高峰，实测最稳时间（成功率 99.9%+）
-    - cron: '23 0 * * *'   # UTC 00:23 → 北京 08:23（超级冷门时间）
-    - cron: '47 5 * * *'   # UTC 05:47 → 北京 13:47（下午也错开）
-workflow_dispatch:      # 保留手动触发（救命用）
+    - cron: '23 0 * * *'   # UTC 00:23 → 北京 08:23（极冷门）
+    - cron: '47 5 * * *'   # UTC 05:47 → 北京 13:47（兜底）
+  workflow_dispatch:       # 手动触发（必须顶格，不能缩进！）
 
-      - name: 设置北京日期（用于缓存key）
-        id: date
-        run: echo "date=$(TZ='Asia/Shanghai' date +%Y-%m-%d)" >> $GITHUB_OUTPUT
-
-      - name: 保存签到标记到缓存
-        if: success()
-        uses: actions/cache@v4
-        with:
-          path: .last_success_date
-          key: quark-sign-success-${{ steps.date.outputs.date }}
-          
 jobs:
   check-if-already-signed:
     runs-on: ubuntu-latest
@@ -25,33 +13,33 @@ jobs:
       should_run: ${{ steps.check.outputs.should_run }}
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4   # v3 已废弃，建议 v4
+        uses: actions/checkout@v4
+
+      - name: 设置北京日期（用于缓存key）
+        id: date
+        run: echo "date=$(TZ='Asia/Shanghai' date +%Y-%m-%d)" >> $GITHUB_OUTPUT
 
       - name: 恢复签到标记缓存
-        id: cache-restore
         uses: actions/cache@v4
         with:
           path: .last_success_date
-          key: quark-sign-success-${{ formatDate('yyyy-MM-dd', addDays(now(), 0)) }}   # 加日期更保险
+          key: quark-sign-success-${{ steps.date.outputs.date }}
 
       - name: 判断今天是否已签到
         id: check
         run: |
           current_date=$(TZ='Asia/Shanghai' date '+%Y-%m-%d')
           echo "当前北京日期：$current_date"
-
           if [ -f .last_success_date ]; then
             last_date=$(cat .last_success_date)
-            echo "上次成功签到日期：$last_date"
             if [ "$last_date" = "$current_date" ]; then
               echo "今天已经签到过，跳过执行"
-              echo "should_run=false" >> "$GITHUB_OUTPUT"
+              echo "should_run=false" >> $GITHUB_OUTPUT
               exit 0
             fi
           fi
-
           echo "今天尚未签到，准备执行"
-          echo "should_run=true" >> "$GITHUB_OUTPUT"
+          echo "should_run=true" >> $GITHUB_OUTPUT
 
   sign-in:
     needs: check-if-already-signed
@@ -61,20 +49,24 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
-      # 早上主签到（随机延迟 0~300 秒）
+      - name: 设置北京日期（再次确保）
+        id: date
+        run: echo "date=$(TZ='Asia/Shanghai' date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+
+      # 早上主签到：08:23 开始，随机延迟 30~180 秒
       - name: 随机延迟（早上）
-        if: github.event.schedule == '7 1 * * *'
+        if: github.event.schedule == '23 0 * * *'
         run: |
-          delay=$((RANDOM % 300))
+          delay=$((RANDOM % 150 + 30))
           echo "早上签到，延迟 ${delay} 秒防风控..."
           sleep $delay
 
-      # 下午兜底 + 手动触发（延迟0~300 秒）
+      # 下午/手动：13:47 开始，随机延迟 30~180 秒
       - name: 随机延迟（下午或手动）
-        if: github.event.schedule == '12 5 * * *' || github.event_name == 'workflow_dispatch'
+        if: github.event.schedule == '47 5 * * *' || github.event_name == 'workflow_dispatch'
         run: |
-          delay=$((RANDOM % 300))
-          echo "下午兜底或手动触发，延迟 ${delay} 秒..."
+          delay=$((RANDOM % 150 + 30))
+          echo "下午或手动签到，延迟 ${delay} 秒..."
           sleep $delay
 
       - name: 设置 Python 环境
@@ -90,7 +82,7 @@ jobs:
           COOKIE_QUARK: ${{ secrets.COOKIE_QUARK }}
         run: python checkIn_Quark.py
 
-      - name: 标记今天签到成功（写入文件）
+      - name: 标记今天签到成功
         if: success()
         run: |
           date_str=$(TZ='Asia/Shanghai' date '+%Y-%m-%d')
@@ -104,7 +96,6 @@ jobs:
           path: .last_success_date
           key: quark-sign-success-${{ steps.date.outputs.date }}
 
-      # 可选：微信推送通知（强烈推荐）
       - name: PushPlus 微信通知
         if: always()
         run: |
@@ -113,10 +104,9 @@ jobs:
           curl -s "http://www.pushplus.plus/send" \
             -d "token=你的PushPlus_token" \
             -d "title=夸克网盘签到 ${status}" \
-            -d "content=时间：$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M')%0A触发方式：${{ github.event_name == 'workflow_dispatch' && '手动' || '自动' }}"
-            
-      # 清理旧记录（保留最近60条）
-      - name: 清理旧的工作流记录
+            -d "content=时间：$(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')%0A触发方式：${{ github.event_name == 'workflow_dispatch' && '手动' || '自动' }}"
+
+      - name: 清理旧的工作流记录（保留最近60条）
         uses: Mattraks/delete-workflow-runs@main
         if: always()
         with:
