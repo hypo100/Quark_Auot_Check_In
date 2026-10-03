@@ -1,119 +1,98 @@
-name: 天翼云盘签到
+name: Quark签到
 on:
-  push:
-    branches:
-      - main
-  watch:
-    types: started
-  workflow_dispatch:
   schedule:
-    - cron: 35 4 * * *    # UTC 04:35 = 北京时间12:35
-    - cron: 13 7 * * *    # UTC 07:13 = 北京时间15:13
+    - cron: '25 16 * * *'   # UTC 16:25 → 北京 00:25
+    - cron: '41 8 * * *'    # UTC 08:41 → 北京时间16:41
+  workflow_dispatch:
 jobs:
-  build-and-deploy:
+  check-if-already-signed:
     runs-on: ubuntu-latest
-    environment: user
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # 解决 Node.js 20 警告
+    
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+    
     steps:
-      # ==========【新增】1. 获取北京时间，生成缓存key ==========
-      - name: 获取北京时间日期
+      - name: 检出代码
+        uses: actions/checkout@v4
+      - name: 设置北京日期（用于缓存key）
         id: date
         run: echo "date=$(TZ='Asia/Shanghai' date +%Y-%m-%d)" >> $GITHUB_OUTPUT
-      # ==========【新增】2. 恢复签到成功标记缓存 ==========
       - name: 恢复签到标记缓存
         uses: actions/cache@v4
         with:
           path: .last_success_date
-          key: tianyi-sign-success-${{ steps.date.outputs.date }}
-      # ==========【新增】3. 判断今日是否已签到，已签到直接退出 ==========
-      - name: 判断今日是否签到成功
-        id: check_sign
+          key: quark-sign-success-${{ steps.date.outputs.date }}
+      - name: 判断今天是否已签到
+        id: check
         run: |
           current_date=$(TZ='Asia/Shanghai' date '+%Y-%m-%d')
-          echo "当前北京时间日期：$current_date"
+          echo "当前北京日期：$current_date"
           if [ -f .last_success_date ]; then
             last_date=$(cat .last_success_date)
             if [ "$last_date" = "$current_date" ]; then
-              echo "今日已经签到成功，跳过本次签到流程，不调用天翼接口"
+              echo "今天已经签到过，跳过执行"
+              echo "should_run=false" >> $GITHUB_OUTPUT
               exit 0
             fi
           fi
-          echo "今日尚未签到，继续执行签到任务"
-      # ==========【修改】随机延时 60 ~ 360秒（1~6分钟） ==========
-      - name: 随机延迟防风控（1~6分钟）
+          echo "今天尚未签到，准备执行"
+          echo "should_run=true" >> $GITHUB_OUTPUT
+  sign-in:
+    needs: check-if-already-signed
+    if: needs.check-if-already-signed.outputs.should_run == 'true'
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # 解决 Node.js 20 警告
+    
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+      - name: 设置北京日期（再次确保）
+        id: date
+        run: echo "date=$(TZ='Asia/Shanghai' date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+      # 早上主签到：随机延迟
+      - name: 随机延迟（早上）
+        if: github.event.schedule == '25 16 * * *'
         run: |
-          delay=$((RANDOM % 301 + 60))
-          echo "随机延时 ${delay} 秒后开始后续流程"
+          delay=$((RANDOM % 150 + 30))
+          echo "早上签到，延迟 ${delay} 秒防风控..."
           sleep $delay
-      - name: 🔀 Check out code
-        uses: actions/checkout@main
-      - name: 🔨 Setup Node.js environment
-        uses: actions/setup-node@main
-        with:
-          node-version: 18
-          cache: npm
-      - name: 📌 Check if Debug is true
-        if: vars.debug == '1'
+      # 下午或手动：随机延迟（已修正cron匹配字符串）
+      - name: 随机延迟（下午或手动）
+        if: github.event.schedule == '41 8 * * *' || github.event_name == 'workflow_dispatch'
         run: |
-          echo "CLOUD189_VERBOSE=1" >> $GITHUB_ENV
-      - name: 📹 Restore cached Cookie
-        id: cache-cookie-restore
-        uses: actions/cache/restore@v4
+          delay=$((RANDOM % 150 + 30))
+          echo "下午或手动签到，延迟 ${delay} 秒..."
+          sleep $delay
+      - name: 设置 Python 环境
+        uses: actions/setup-python@v4
         with:
-          path: .token
-          key: cloud189-token-${{ hashFiles('.token/*.json') }}
-          restore-keys: cloud189-token-
-      - name: 🔧 Init secrets
-        uses: shine1594/secrets-to-env-action@master
-        with:
-          secrets: ${{ toJSON(secrets) }}
-          secrets_env: production
-          prefix_prod: ""
-          file_name_prod: .env
-      - name: 📡 Init dependencies
-        run: npm install
-      - name: 🚀 Run签到脚本
-        uses: nick-fields/retry@master
-        with:
-          timeout_minutes: 30
-          max_attempts: 3
-          command: npm start
-      # ==========【新增】4. 签到成功，写入今日日期并保存缓存 ==========
-      - name: 记录今日签到成功标记
+          python-version: '3.12'
+      - name: 安装依赖
+        run: pip install requests
+      - name: 执行夸克网盘签到
+        env:
+          COOKIE_QUARK: ${{ secrets.COOKIE_QUARK }}
+        run: python checkIn_Quark.py
+      - name: 标记今天签到成功
         if: success()
         run: |
           date_str=$(TZ='Asia/Shanghai' date '+%Y-%m-%d')
           echo "$date_str" > .last_success_date
-          echo "签到成功，记录日期：$date_str"
-      - name: 保存签到标记缓存
+          echo "已记录今日签到成功：$date_str"
+      - name: 保存签到标记到缓存
         if: success()
         uses: actions/cache@v4
         with:
           path: .last_success_date
-          key: tianyi-sign-success-${{ steps.date.outputs.date }}
-      - name: 🔑 Compute token hash
-        if: always()
-        run: |
-          NEW_HASH=$(find .token -name '*.json' -exec sha256sum {} \; 2>/dev/null | sha256sum | cut -d' ' -f1)
-          echo "TOKEN_HASH=${NEW_HASH}" >> $GITHUB_ENV
-      - name: 📹 Save cached Cookie
-        if: always() && env.TOKEN_HASH != ''
-        uses: actions/cache/save@v4
-        with:
-          path: .token
-          key: cloud189-token-${{ env.TOKEN_HASH }}
-      - name: 🚗 Keep Running
-        if: github.event_name == 'schedule'
-        run: |
-          git config --local user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
-          git config --local user.name "${{ github.actor }}"
-          git remote set-url origin https://${{ github.actor }}:${{ github.token }}@github.com/${{ github.repository }}
-          git pull --rebase --autostash
-          git commit --allow-empty -m "Keep Running..."
-          git push
-      - name: 🎉 Delete old workflow run
+          key: quark-sign-success-${{ steps.date.outputs.date }}
+      - name: 清理旧的工作流记录（保留最近60条）
         uses: Mattraks/delete-workflow-runs@main
+        if: always()
         with:
           token: ${{ github.token }}
           repository: ${{ github.repository }}
           retain_days: 0
-          keep_minimum_runs: 50
+          keep_minimum_runs: 60
